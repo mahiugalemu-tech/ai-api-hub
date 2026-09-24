@@ -1,0 +1,42 @@
+// use prisma-8
+
+model Connector {
+  id          Int      @id @default(autoincrement())
+  name        String
+  slug        String   @unique
+  description String?
+  
+  provider    String
+  model       String
+  
+  prompt      String
+  
+  inputSchema  Json
+  outputSchema Json
+  
+  authType    String   @default("api_key")
+  isActive    Boolean  @default(true)
+  
+  createdAt   TimestamptzString @default(now())
+  updatedAt   temporal.updatedAtString()
+
+  requests    ApiRequest[]
+}
+
+model ApiRequest {
+  id           Int      @id @default(autoincrement())
+  
+  connector    Connector @relation(fields: [connectorId], references: [id])
+  connectorId  Int
+  
+  status       String
+  
+  responseTime Int?
+  inputTokens  Int?
+  outputTokens Int?
+  estimatedCost Float?
+  
+  errorMessage String?
+  
+  createdAt    TimestamptzString @default(now())
+}
