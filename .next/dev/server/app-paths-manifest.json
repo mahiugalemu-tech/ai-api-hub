@@ -1,8 +1,0 @@
-{
-  "/api/analytics/route": "app/api/analytics/route.js",
-  "/api/connectors/[Id]/route": "app/api/connectors/[Id]/route.js",
-  "/api/connectors/route": "app/api/connectors/route.js",
-  "/api/run/[connectorId]/route": "app/api/run/[connectorId]/route.js",
-  "/api/stats/route": "app/api/stats/route.js",
-  "/page": "app/page.js"
-}
