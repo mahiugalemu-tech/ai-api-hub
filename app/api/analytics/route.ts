@@ -76,6 +76,8 @@ export async function GET() {
         failed: number;
         totalResponseTime: number;
         responseCount: number;
+        firstUsed: string | null;
+        lastUsed: string | null;
       }
     >();
 
@@ -107,9 +109,31 @@ export async function GET() {
         failed: 0,
         totalResponseTime: 0,
         responseCount: 0,
+        firstUsed: null,
+        lastUsed: null,
       };
 
       existing.requests += 1;
+
+      const requestTimestamp = new Date(
+        request.createdAt
+      ).toISOString();
+
+      if (
+        existing.firstUsed === null ||
+        new Date(requestTimestamp).getTime() <
+          new Date(existing.firstUsed).getTime()
+      ) {
+        existing.firstUsed = requestTimestamp;
+      }
+
+      if (
+        existing.lastUsed === null ||
+        new Date(requestTimestamp).getTime() >
+          new Date(existing.lastUsed).getTime()
+      ) {
+        existing.lastUsed = requestTimestamp;
+      }
 
       if (request.status === "success") {
         existing.successful += 1;

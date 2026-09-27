@@ -418,6 +418,8 @@ type AnalyticsData = {
     successful: number;
     failed: number;
     averageResponseTime: number;
+    firstUsed: string | null;
+    lastUsed: string | null;
   }>;
   providers: Array<{
     provider: string;
@@ -669,7 +671,7 @@ function AnalyticsView({
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-left">
+              <table className="w-full min-w-[1050px] text-left">
                 <thead>
                   <tr className="border-b border-white/[0.06] text-[10px] uppercase tracking-[0.14em] text-slate-600">
                     <th className="pb-3 pr-4">Connector</th>
@@ -677,7 +679,9 @@ function AnalyticsView({
                     <th className="pb-3 pr-4">Requests</th>
                     <th className="pb-3 pr-4">Success</th>
                     <th className="pb-3 pr-4">Failed</th>
-                    <th className="pb-3">Avg. Response</th>
+                    <th className="pb-3 pr-4">Avg. Response</th>
+                    <th className="pb-3 pr-4">First Used</th>
+                    <th className="pb-3">Last Used</th>
                   </tr>
                 </thead>
 
@@ -685,7 +689,7 @@ function AnalyticsView({
                   {data.connectors.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={8}
                         className="py-8 text-center text-xs text-slate-600"
                       >
                         No connector requests recorded yet.
@@ -717,8 +721,36 @@ function AnalyticsView({
                         <td className="py-4 pr-4 text-xs text-red-300">
                           {connector.failed}
                         </td>
-                        <td className="py-4 text-xs text-slate-300">
+                        <td className="py-4 pr-4 text-xs text-slate-300">
                           {connector.averageResponseTime}ms
+                        </td>
+                        <td className="py-4 pr-4 text-xs text-slate-400">
+                          {connector.firstUsed
+                            ? new Date(connector.firstUsed).toLocaleString(
+                                "en-IN",
+                                {
+                                  day: "2-digit",
+                                  month: "short",
+                                  year: "numeric",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                }
+                              )
+                            : "—"}
+                        </td>
+                        <td className="py-4 text-xs text-slate-400">
+                          {connector.lastUsed
+                            ? new Date(connector.lastUsed).toLocaleString(
+                                "en-IN",
+                                {
+                                  day: "2-digit",
+                                  month: "short",
+                                  year: "numeric",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                }
+                              )
+                            : "—"}
                         </td>
                       </tr>
                     ))
@@ -1215,6 +1247,203 @@ function DocumentationView({
   );
 }
 
+
+function ConnectorManagementView({
+  connectors,
+  loading,
+  onNew,
+  onEdit,
+  onTest,
+  onView,
+  onDelete,
+  deleteLoadingId,
+  message,
+}: {
+  connectors: Connector[];
+  loading: boolean;
+  onNew: () => void;
+  onEdit: (connector: Connector) => void;
+  onTest: (connector: Connector) => void;
+  onView: (connector: Connector) => void;
+  onDelete: (connector: Connector) => void;
+  deleteLoadingId: number | null;
+  message: string;
+}) {
+  return (
+    <section className="mx-auto max-w-[1500px] px-6 py-8 lg:px-10 lg:py-10">
+      <div className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
+        <div>
+          <div className="mb-3 flex items-center gap-2">
+            <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)]" />
+            <span className="text-[11px] font-medium uppercase tracking-[0.2em] text-cyan-400">
+              Infrastructure
+            </span>
+          </div>
+
+          <h3 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+            Connector{" "}
+            <span className="bg-gradient-to-r from-cyan-300 via-blue-400 to-violet-400 bg-clip-text text-transparent">
+              Management
+            </span>
+          </h3>
+
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500">
+            Create, edit, disable, test, inspect and delete your reusable AI-powered endpoints.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={onNew}
+          className="rounded-xl border border-cyan-400/20 bg-cyan-400/[0.08] px-4 py-2.5 text-xs font-medium text-cyan-300 transition hover:bg-cyan-400/[0.14]"
+        >
+          + New Connector
+        </button>
+      </div>
+
+      {message && (
+        <div className="mb-6 rounded-xl border border-cyan-400/10 bg-cyan-400/[0.04] px-4 py-3 text-xs text-cyan-300">
+          {message}
+        </div>
+      )}
+
+      {loading ? (
+        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-10 text-center text-sm text-slate-500">
+          Loading connectors...
+        </div>
+      ) : connectors.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-white/[0.1] bg-white/[0.02] p-12 text-center">
+          <p className="text-sm font-medium text-slate-300">
+            No connectors configured
+          </p>
+          <p className="mt-2 text-xs text-slate-600">
+            Create your first AI connector to get started.
+          </p>
+          <button
+            type="button"
+            onClick={onNew}
+            className="mt-5 rounded-xl border border-cyan-400/20 bg-cyan-400/[0.08] px-4 py-2.5 text-xs font-medium text-cyan-300 transition hover:bg-cyan-400/[0.14]"
+          >
+            + Create Connector
+          </button>
+        </div>
+      ) : (
+        <div className="grid gap-5 xl:grid-cols-2">
+          {connectors.map((connector) => {
+            const providerStyle = getProviderStyle(connector.provider);
+
+            return (
+              <div
+                key={connector.id}
+                className="group relative overflow-hidden rounded-2xl border border-white/[0.07] bg-white/[0.025] p-5 backdrop-blur-xl transition duration-300 hover:border-cyan-400/20 hover:bg-white/[0.04]"
+              >
+                <div className="pointer-events-none absolute -right-16 -top-16 h-40 w-40 rounded-full bg-cyan-400/[0.045] blur-3xl transition duration-500 group-hover:bg-cyan-400/[0.09]" />
+
+                <div className="relative flex items-start justify-between gap-4">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div
+                      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border text-lg shadow-inner ${providerStyle.className}`}
+                    >
+                      {providerStyle.icon}
+                    </div>
+
+                    <div className="min-w-0">
+                      <h5 className="truncate text-sm font-semibold text-white">
+                        {connector.name}
+                      </h5>
+
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[9px] font-semibold tracking-[0.12em] ${providerStyle.className}`}
+                        >
+                          {providerStyle.label}
+                        </span>
+                        <span className="truncate text-[10px] text-slate-600">
+                          {connector.model}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <span
+                    className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] ${
+                      connector.isActive
+                        ? "border-emerald-400/10 bg-emerald-400/[0.06] text-emerald-300"
+                        : "border-slate-400/10 bg-slate-400/[0.06] text-slate-500"
+                    }`}
+                  >
+                    {connector.isActive ? "Active" : "Disabled"}
+                  </span>
+                </div>
+
+                <p className="relative mt-5 min-h-[42px] text-xs leading-5 text-slate-500">
+                  {connector.description || "No description provided."}
+                </p>
+
+                <div className="relative mt-5 grid gap-3 rounded-xl border border-white/[0.05] bg-black/10 p-3 sm:grid-cols-2">
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.15em] text-slate-600">
+                      Endpoint
+                    </p>
+                    <p className="mt-1 truncate text-[10px] text-slate-400">
+                      POST /api/run/{connector.id}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.15em] text-slate-600">
+                      Authentication
+                    </p>
+                    <p className="mt-1 text-[10px] text-slate-400">
+                      API Key
+                    </p>
+                  </div>
+                </div>
+
+                <div className="relative mt-5 flex flex-wrap gap-2 border-t border-white/[0.06] pt-4">
+                  <button
+                    type="button"
+                    onClick={() => onEdit(connector)}
+                    className="rounded-lg border border-violet-400/15 bg-violet-400/[0.05] px-3 py-2 text-[10px] font-medium text-violet-300 transition hover:bg-violet-400/[0.1]"
+                  >
+                    Edit
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={!connector.isActive}
+                    onClick={() => onTest(connector)}
+                    className="rounded-lg border border-cyan-400/15 bg-cyan-400/[0.05] px-3 py-2 text-[10px] font-medium text-cyan-300 transition hover:bg-cyan-400/[0.1] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Test API
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onView(connector)}
+                    className="rounded-lg border border-white/[0.08] bg-white/[0.035] px-3 py-2 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.08] hover:text-white"
+                  >
+                    View Details
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={deleteLoadingId === connector.id}
+                    onClick={() => onDelete(connector)}
+                    className="rounded-lg border border-red-400/15 bg-red-400/[0.04] px-3 py-2 text-[10px] font-medium text-red-300 transition hover:bg-red-400/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {deleteLoadingId === connector.id ? "Deleting..." : "Delete"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function Home() {
   const [connectors, setConnectors] = React.useState<Connector[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -1260,6 +1489,10 @@ export default function Home() {
     React.useState(false);
   const [editingConnector, setEditingConnector] =
     React.useState<Connector | null>(null);
+  const [deleteLoadingId, setDeleteLoadingId] =
+    React.useState<number | null>(null);
+  const [managementMessage, setManagementMessage] =
+    React.useState("");
   const [testingConnector, setTestingConnector] =
     React.useState<Connector | null>(null);
   const [viewingConnector, setViewingConnector] =
@@ -1317,6 +1550,64 @@ export default function Home() {
       );
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function deleteConnector(connector: Connector) {
+    const confirmed = window.confirm(
+      `Delete "${connector.name}"?\n\nThis will permanently remove the connector configuration.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setDeleteLoadingId(connector.id);
+      setManagementMessage("");
+
+      const response = await fetch(
+        `/api/connectors/${connector.id}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error || "Failed to delete connector."
+        );
+      }
+
+      if (editingConnector?.id === connector.id) {
+        setEditingConnector(null);
+      }
+
+      if (viewingConnector?.id === connector.id) {
+        setViewingConnector(null);
+      }
+
+      if (testingConnector?.id === connector.id) {
+        setTestingConnector(null);
+      }
+
+      await loadConnectors();
+      await loadStats();
+      await loadAnalytics();
+
+      setManagementMessage(
+        `"${connector.name}" was deleted successfully.`
+      );
+    } catch (error) {
+      setManagementMessage(
+        error instanceof Error
+          ? error.message
+          : "Failed to delete connector."
+      );
+    } finally {
+      setDeleteLoadingId(null);
     }
   }
 
@@ -1508,6 +1799,11 @@ export default function Home() {
                 onClick={() => {
                   if (item.name === "Overview") {
                     setActiveSection("Overview");
+                  }
+
+                  if (item.name === "Connectors") {
+                    setActiveSection("Connectors");
+                    setManagementMessage("");
                   }
 
                   if (item.name === "Analytics") {
@@ -1702,7 +1998,28 @@ export default function Home() {
           </header>
 
           {/* Dashboard */}
-          {activeSection === "Analytics" ? (
+          {activeSection === "Connectors" ? (
+            <ConnectorManagementView
+              connectors={connectors}
+              loading={loading}
+              onNew={() => {
+                setEditingConnector(null);
+                setShowNewConnector(true);
+              }}
+              onEdit={(connector) => {
+                setEditingConnector(connector);
+              }}
+              onTest={(connector) => {
+                setTestingConnector(connector);
+              }}
+              onView={(connector) => {
+                setViewingConnector(connector);
+              }}
+              onDelete={deleteConnector}
+              deleteLoadingId={deleteLoadingId}
+              message={managementMessage}
+            />
+          ) : activeSection === "Analytics" ? (
             <AnalyticsView
               data={analytics}
               loading={analyticsLoading}
@@ -1972,7 +2289,10 @@ export default function Home() {
                         </button>
 
                         <button
-                          onClick={() => setEditingConnector(connector)}
+                          onClick={() => {
+                            setEditingConnector(connector);
+                            setShowNewConnector(true);
+                          }}
                           className="rounded-lg border border-violet-400/15 bg-violet-400/[0.05] px-3 py-1.5 text-[10px] font-medium text-violet-300 transition hover:border-violet-400/30 hover:bg-violet-400/[0.1]"
                         >
                           Edit
@@ -1983,6 +2303,14 @@ export default function Home() {
                           className="rounded-lg border border-white/[0.06] bg-white/[0.035] px-3 py-1.5 text-[10px] text-slate-300 transition hover:border-white/[0.12] hover:bg-white/[0.08]"
                         >
                           View →
+                        </button>
+
+                        <button
+                          onClick={() => deleteConnector(connector)}
+                          disabled={deleteLoadingId === connector.id}
+                          className="rounded-lg border border-red-400/15 bg-red-400/[0.04] px-3 py-1.5 text-[10px] font-medium text-red-300 transition hover:bg-red-400/[0.09] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {deleteLoadingId === connector.id ? "Deleting..." : "Delete"}
                         </button>
 
                       </div>
@@ -2558,21 +2886,13 @@ export default function Home() {
       {/* CREATE CONNECTOR MODAL ONLY */}
       {showNewConnector && (
         <NewConnectorModal
-          onClose={() =>
-            setShowNewConnector(false)
-          }
+          connector={editingConnector}
+          onClose={() => {
+            setShowNewConnector(false);
+            setEditingConnector(null);
+          }}
           onCreated={() => {
             setShowNewConnector(false);
-            loadConnectors();
-          }}
-        />
-      )}
-
-      {editingConnector && (
-        <NewConnectorModal
-          connector={editingConnector}
-          onClose={() => setEditingConnector(null)}
-          onCreated={() => {
             setEditingConnector(null);
             loadConnectors();
             loadStats();
@@ -2580,6 +2900,7 @@ export default function Home() {
           }}
         />
       )}
+
 
     </main>
   );

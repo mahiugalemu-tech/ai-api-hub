@@ -6,12 +6,10 @@ import {
   parseStructuredOutput,
   validateAndNormalizeInput,
 } from "../../../../lib/providers/structured";
+import { estimateTokenCost } from "../../../../lib/usage/cost";
 
-interface RouteContext {
-  params: Promise<{
-    connectorId: string;
-  }>;
-}
+const MAX_REQUEST_SIZE = 30 * 1024 * 1024;
+const PROVIDER_TIMEOUT = 45 * 1000;
 
 function getApiKey(request: Request): string | null {
   const xApiKey = request.headers.get("x-api-key");
@@ -20,7 +18,8 @@ function getApiKey(request: Request): string | null {
     return xApiKey.trim();
   }
 
-  const authorization = request.headers.get("authorization");
+  const authorization =
+    request.headers.get("authorization");
 
   if (authorization?.startsWith("Bearer ")) {
     return authorization.slice(7).trim();
@@ -29,39 +28,134 @@ function getApiKey(request: Request): string | null {
   return null;
 }
 
+function getConnectorIdFromRequest(
+  request: Request
+): number | null {
+  try {
+    const url = new URL(request.url);
+
+    const parts = url.pathname
+      .split("/")
+      .filter(Boolean);
+
+    const rawId =
+      parts[parts.length - 1] ?? "";
+
+    const id = Number(rawId);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return null;
+    }
+
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+function isVisionModel(
+  provider: string,
+  model: string
+): boolean {
+  return (
+    provider.toLowerCase() === "groq" &&
+    model === "qwen/qwen3.8-27b"
+  );
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number
+): Promise<T> {
+  let timeoutId:
+    | ReturnType<typeof setTimeout>
+    | undefined;
+
+  const timeoutPromise = new Promise<never>(
+    (_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(
+          new Error(
+            "The AI provider request timed out."
+          )
+        );
+      }, timeoutMs);
+    }
+  );
+
+  try {
+    return await Promise.race([
+      promise,
+      timeoutPromise,
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+async function logFailedRequest(
+  connectorId: number,
+  responseTime: number,
+  errorMessage: string,
+  inputTokens?: number,
+  outputTokens?: number,
+  estimatedCost?: number | null
+) {
+  try {
+    await db.orm.public.ApiRequest.create({
+      connectorId,
+      status: "failed",
+      responseTime,
+      inputTokens,
+      outputTokens,
+      estimatedCost:
+        estimatedCost ?? null,
+      errorMessage,
+    });
+  } catch (loggingError) {
+    console.error(
+      "Failed to log API request:",
+      loggingError
+    );
+  }
+}
+
 export async function POST(
-  request: Request,
-  context: RouteContext
+  request: Request
 ) {
   const startTime = Date.now();
 
-  let connectorId: number | null = null;
+  const connectorId =
+    getConnectorIdFromRequest(request);
 
   try {
-    const { connectorId: connectorIdParam } =
-      await context.params;
+    // -------------------------------------------------------
+    // Connector ID
+    // -------------------------------------------------------
 
-    const id = Number(connectorIdParam);
-
-    if (!Number.isInteger(id)) {
+    if (connectorId === null) {
       return NextResponse.json(
         {
           success: false,
           data: null,
-          error: "Invalid connector ID",
+          error: "Invalid connector ID.",
         },
         { status: 400 }
       );
     }
 
-    connectorId = id;
+    // -------------------------------------------------------
+    // API authentication
+    // -------------------------------------------------------
 
     const configuredApiKey =
       process.env.AI_API_HUB_KEY;
 
     if (!configuredApiKey) {
       console.error(
-        "AI_API_HUB_KEY is not configured"
+        "AI_API_HUB_KEY is not configured."
       );
 
       return NextResponse.json(
@@ -75,7 +169,8 @@ export async function POST(
       );
     }
 
-    const providedApiKey = getApiKey(request);
+    const providedApiKey =
+      getApiKey(request);
 
     if (
       !providedApiKey ||
@@ -91,6 +186,32 @@ export async function POST(
         { status: 401 }
       );
     }
+
+    // -------------------------------------------------------
+    // Request size validation
+    // -------------------------------------------------------
+
+    const contentLength =
+      request.headers.get("content-length");
+
+    if (
+      contentLength &&
+      Number(contentLength) > MAX_REQUEST_SIZE
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          data: null,
+          error:
+            "Request payload is too large. Maximum size is 30 MB.",
+        },
+        { status: 413 }
+      );
+    }
+
+    // -------------------------------------------------------
+    // Parse JSON
+    // -------------------------------------------------------
 
     let body: unknown;
 
@@ -117,7 +238,8 @@ export async function POST(
         {
           success: false,
           data: null,
-          error: "Missing required field: input",
+          error:
+            "Missing required field: input",
         },
         { status: 400 }
       );
@@ -127,23 +249,16 @@ export async function POST(
       input: unknown;
     };
 
-    const contentLength = request.headers.get("content-length");
-    if (contentLength && Number(contentLength) > 30 * 1024 * 1024) {
-      return NextResponse.json(
-        {
-          success: false,
-          data: null,
-          error: "Request payload is too large. Maximum size is 30 MB.",
-        },
-        { status: 413 }
-      );
-    }
+    // -------------------------------------------------------
+    // Connector lookup
+    // -------------------------------------------------------
 
     const connectors =
       await db.orm.public.Connector.all();
 
     const connector = connectors.find(
-      (item) => item.id === id
+      (item) =>
+        Number(item.id) === connectorId
     );
 
     if (!connector) {
@@ -151,11 +266,15 @@ export async function POST(
         {
           success: false,
           data: null,
-          error: "Connector not found",
+          error: "Connector not found.",
         },
         { status: 404 }
       );
     }
+
+    // -------------------------------------------------------
+    // Active status
+    // -------------------------------------------------------
 
     if (!connector.isActive) {
       return NextResponse.json(
@@ -169,10 +288,15 @@ export async function POST(
       );
     }
 
-    const normalizedInput = validateAndNormalizeInput(
-      requestBody.input,
-      connector.inputSchema
-    );
+    // -------------------------------------------------------
+    // Input validation
+    // -------------------------------------------------------
+
+    const normalizedInput =
+      validateAndNormalizeInput(
+        requestBody.input,
+        connector.inputSchema
+      );
 
     if (!normalizedInput.valid) {
       return NextResponse.json(
@@ -185,34 +309,60 @@ export async function POST(
       );
     }
 
-    const isVisionModel =
-      connector.provider === "groq" &&
-      connector.model === "qwen/qwen3.8-27b";
+    // -------------------------------------------------------
+    // Vision-specific validation
+    // -------------------------------------------------------
 
-    if (isVisionModel) {
+    if (
+      isVisionModel(
+        connector.provider,
+        connector.model
+      )
+    ) {
       if (
         !requestBody.input ||
-        typeof requestBody.input !== "object" ||
-        typeof (
-          requestBody.input as Record<string, unknown>
-        ).imageData !== "string" ||
-        !(
-          requestBody.input as Record<string, unknown>
-        ).imageData
+        typeof requestBody.input !== "object"
       ) {
         return NextResponse.json(
           {
             success: false,
             data: null,
             error:
-              "Image data is required for the Image Analyzer.",
+              "Image input is required for this vision connector.",
+          },
+          { status: 400 }
+        );
+      }
+
+      const input =
+        requestBody.input as Record<
+          string,
+          unknown
+        >;
+
+      if (
+        typeof input.imageData !== "string" ||
+        input.imageData.length === 0
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            data: null,
+            error:
+              "Image data is required for the vision connector.",
           },
           { status: 400 }
         );
       }
     }
 
-    let adapter;
+    // -------------------------------------------------------
+    // Provider adapter
+    // -------------------------------------------------------
+
+    let adapter:
+      | GeminiAdapter
+      | GroqAdapter;
 
     if (connector.provider === "gemini") {
       adapter = new GeminiAdapter();
@@ -223,20 +373,41 @@ export async function POST(
         {
           success: false,
           data: null,
-          error: `Unsupported AI provider: ${connector.provider}`,
+          error:
+            `Unsupported AI provider: ${connector.provider}`,
         },
         { status: 400 }
       );
     }
 
-    const result = await adapter.generate({
-      model: connector.model,
-      prompt: connector.prompt,
-      input: normalizedInput.value,
-      outputSchema: connector.outputSchema,
-    });
+    // -------------------------------------------------------
+    // AI provider call with timeout
+    // -------------------------------------------------------
 
-    const responseTime = Date.now() - startTime;
+    const result = await withTimeout(
+      adapter.generate({
+        model: connector.model,
+        prompt: connector.prompt,
+        input: normalizedInput.value,
+        outputSchema: connector.outputSchema,
+      }),
+      PROVIDER_TIMEOUT
+    );
+
+    const responseTime =
+      Date.now() - startTime;
+
+    const estimatedCost =
+      estimateTokenCost(
+        connector.provider,
+        connector.model,
+        result.inputTokens,
+        result.outputTokens
+      );
+
+    // -------------------------------------------------------
+    // Structured output parsing
+    // -------------------------------------------------------
 
     let data: unknown;
 
@@ -251,21 +422,14 @@ export async function POST(
           ? parseError.message
           : "The AI provider returned invalid structured output.";
 
-      try {
-        await db.orm.public.ApiRequest.create({
-          connectorId: connector.id,
-          status: "failed",
-          responseTime,
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
-          errorMessage,
-        });
-      } catch (loggingError) {
-        console.error(
-          "Failed to log structured-output failure:",
-          loggingError
-        );
-      }
+      await logFailedRequest(
+        connector.id,
+        responseTime,
+        errorMessage,
+        result.inputTokens,
+        result.outputTokens,
+        estimatedCost
+      );
 
       return NextResponse.json(
         {
@@ -278,51 +442,83 @@ export async function POST(
       );
     }
 
-    await db.orm.public.ApiRequest.create({
-      connectorId: connector.id,
-      status: "success",
-      responseTime,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-    });
+    // -------------------------------------------------------
+    // Successful request logging
+    // -------------------------------------------------------
+
+    try {
+      await db.orm.public.ApiRequest.create({
+        connectorId: connector.id,
+        status: "success",
+        responseTime,
+        inputTokens:
+          result.inputTokens,
+        outputTokens:
+          result.outputTokens,
+        estimatedCost,
+      });
+    } catch (loggingError) {
+      console.error(
+        "Failed to log successful API request:",
+        loggingError
+      );
+    }
+
+    // -------------------------------------------------------
+    // Predictable API response
+    // -------------------------------------------------------
 
     return NextResponse.json({
       success: true,
 
-      // Assignment-required predictable response.
       data,
 
       error: null,
 
       connector: connector.name,
+
       provider: connector.provider,
+
       model: connector.model,
 
       usage: {
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
-        totalTokens: result.totalTokens,
+        inputTokens:
+          result.inputTokens,
+
+        outputTokens:
+          result.outputTokens,
+
+        totalTokens:
+          result.totalTokens,
+
+        estimatedCost,
       },
 
       responseTime,
 
-      imageData: result.imageData ?? null,
-      imageMimeType: result.imageMimeType ?? null,
+      imageData:
+        result.imageData ?? null,
 
-      // Kept temporarily so the existing Playground
-      // can continue displaying the response.
+      imageMimeType:
+        result.imageMimeType ?? null,
+
       response:
         typeof data === "string"
           ? data
-          : JSON.stringify(data, null, 2),
+          : JSON.stringify(
+              data,
+              null,
+              2
+            ),
     });
   } catch (error) {
-    const responseTime = Date.now() - startTime;
+    const responseTime =
+      Date.now() - startTime;
 
-    const errorMessage =
+    const rawMessage =
       error instanceof Error
         ? error.message
-        : "AI provider request failed";
+        : "AI provider request failed.";
 
     console.error(
       "AI execution failed:",
@@ -330,30 +526,32 @@ export async function POST(
     );
 
     if (connectorId !== null) {
-      try {
-        await db.orm.public.ApiRequest.create({
-          connectorId,
-          status: "failed",
-          responseTime,
-          errorMessage,
-        });
-      } catch (loggingError) {
-        console.error(
-          "Failed to log failed API request:",
-          loggingError
-        );
-      }
+      await logFailedRequest(
+        connectorId,
+        responseTime,
+        rawMessage
+      );
     }
+
+    const isTimeout =
+      rawMessage
+        .toLowerCase()
+        .includes("timed out");
 
     return NextResponse.json(
       {
         success: false,
         data: null,
-        error:
-          "The AI request could not be completed.",
+        error: isTimeout
+          ? "The AI provider request timed out. Please try again."
+          : "The AI request could not be completed.",
         responseTime,
       },
-      { status: 500 }
+      {
+        status: isTimeout
+          ? 504
+          : 500,
+      }
     );
   }
 }
